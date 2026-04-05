@@ -92,7 +92,10 @@ class PreferencesUpdate(BaseModel):
 @app.get("/api/preferences")
 def get_preferences(x_user_id: str = Header(None)):
     user_id = _get_user_id(x_user_id)
-    prefs = db.get_preferences(user_id)
+    try:
+        prefs = db.get_preferences(user_id)
+    except Exception:
+        prefs = None
     if not prefs:
         return {"user_id": user_id, "timezone": "America/New_York", "briefing_enabled": True}
     return prefs
@@ -100,7 +103,10 @@ def get_preferences(x_user_id: str = Header(None)):
 @app.put("/api/preferences")
 def update_preferences(body: PreferencesUpdate, x_user_id: str = Header(None)):
     user_id = _get_user_id(x_user_id)
-    db.upsert_preferences(user_id, body.timezone, body.briefing_enabled)
+    try:
+        db.upsert_preferences(user_id, body.timezone, body.briefing_enabled)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Preferences table not available: {e}")
     return {"status": "ok"}
 
 
@@ -109,12 +115,18 @@ def update_preferences(body: PreferencesUpdate, x_user_id: str = Header(None)):
 @app.get("/api/briefings")
 def list_briefings(limit: int = 7, x_user_id: str = Header(None)):
     user_id = _get_user_id(x_user_id)
-    return db.get_briefings(user_id, limit=limit)
+    try:
+        return db.get_briefings(user_id, limit=limit)
+    except Exception:
+        return []
 
 @app.get("/api/briefings/latest")
 def latest_briefing(x_user_id: str = Header(None)):
     user_id = _get_user_id(x_user_id)
-    briefing = db.get_latest_briefing(user_id)
+    try:
+        briefing = db.get_latest_briefing(user_id)
+    except Exception:
+        briefing = None
     if not briefing:
         return {"message": "No briefings yet. Your first briefing will be generated at 8:00 AM your local time."}
     return briefing

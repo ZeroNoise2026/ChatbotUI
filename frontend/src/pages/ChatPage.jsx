@@ -65,7 +65,7 @@ export default function ChatPage() {
         <select
           value={ticker}
           onChange={e => setTicker(e.target.value)}
-          style={{ width: 140 }}
+          style={{ width: 160, minHeight: 36 }}
         >
           <option value="">All tickers</option>
           {tickers.map(t => <option key={t.ticker} value={t.ticker}>{t.ticker}</option>)}

@@ -39,6 +39,11 @@ input, select {
   transition: border-color 0.15s;
 }
 
+select option {
+  background: #18181b;
+  color: #e4e4e7;
+}
+
 input:focus, select:focus {
   border-color: #3b82f6;
 }
