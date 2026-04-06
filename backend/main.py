@@ -11,7 +11,7 @@ Endpoints:
   PUT  /api/preferences           — update preferences
   GET  /api/briefings             — recent daily briefings
   GET  /api/briefings/latest      — most recent briefing
-  POST /api/chat                  — RAG-based Q&A
+  POST /api/chat/stream           — RAG-based Q&A (SSE streaming)
   POST /api/summarize             — on-demand ticker summary
 
 Run:
@@ -21,6 +21,7 @@ Run:
 import logging
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
@@ -138,10 +139,18 @@ class ChatRequest(BaseModel):
     question: str
     ticker: Optional[str] = None
 
-@app.post("/api/chat")
-def chat(body: ChatRequest, x_user_id: str = Header(None)):
+@app.post("/api/chat/stream")
+def chat_stream(body: ChatRequest, x_user_id: str = Header(None)):
+    """SSE streaming chat — proxies token stream from question-service."""
     _get_user_id(x_user_id)
-    return rag.answer_question(body.question, ticker=body.ticker)
+    return StreamingResponse(
+        rag.stream_answer_sse(body.question, ticker=body.ticker),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── On-demand Summarization ───────────────────────────────────
