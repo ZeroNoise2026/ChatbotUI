@@ -43,12 +43,39 @@ export default function ChatPage() {
 
     // Add an empty assistant message that we'll fill incrementally
     const msgIndex = messages.length + 1 // +1 because we just pushed user msg
-    setMessages(prev => [...prev, { role: 'assistant', content: '', streaming: true }])
+    setMessages(prev => [...prev, { role: 'assistant', content: '', thinking: '', status: '', streaming: true }])
 
     let accumulated = ''
+    let thinkingText = ''
+    let thinkingStart = null
+    let thinkingDuration = null
 
     await api.chatStream(q, ticker || null, {
+      onStatus: (text) => {
+        setMessages(prev => {
+          const updated = [...prev]
+          updated[msgIndex] = { ...updated[msgIndex], status: text }
+          return updated
+        })
+      },
+      onThinking: (text) => {
+        if (!thinkingStart) thinkingStart = Date.now()
+        thinkingText += text
+        setMessages(prev => {
+          const updated = [...prev]
+          updated[msgIndex] = { ...updated[msgIndex], thinking: thinkingText }
+          return updated
+        })
+      },
       onToken: (token) => {
+        if (thinkingStart && thinkingDuration === null) {
+          thinkingDuration = Math.round((Date.now() - thinkingStart) / 1000)
+          setMessages(prev => {
+            const updated = [...prev]
+            updated[msgIndex] = { ...updated[msgIndex], thinkingTime: thinkingDuration }
+            return updated
+          })
+        }
         accumulated += token
         setMessages(prev => {
           const updated = [...prev]
@@ -72,6 +99,7 @@ export default function ChatPage() {
             content: accumulated || 'The AI model is busy. Please wait a moment and try again.',
             streaming: false,
             elapsed: timerRef.elapsed,
+            thinkingTime: thinkingDuration,
           }
           return updated
         })
@@ -139,7 +167,7 @@ export default function ChatPage() {
           </div>
         )}
         {messages.map((msg, i) => (
-          msg.streaming && !msg.content ? null :
+          msg.streaming && !msg.content && !msg.thinking ? null :
             <div key={i} style={{
               alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
               maxWidth: '85%',
@@ -149,6 +177,32 @@ export default function ChatPage() {
               fontSize: '0.875rem',
               lineHeight: 1.6,
             }}>
+              {msg.role === 'assistant' && msg.thinking && (
+                <details open={msg.streaming && !msg.content} style={{ marginBottom: msg.content ? 8 : 0 }}>
+                  <summary style={{ cursor: 'pointer', userSelect: 'none', fontSize: '0.8rem', color: '#a1a1aa', listStyle: 'none' }}>
+                    🧠 {msg.streaming && !msg.content
+                      ? <><span className="thinking-dot" style={{ marginLeft: 4, marginRight: 6 }} />Thinking... ({elapsed}s)</>
+                      : `Thought for ${msg.thinkingTime || '?'}s`
+                    }
+                  </summary>
+                  <div
+                    ref={el => { if (el && msg.streaming) el.scrollTop = el.scrollHeight }}
+                    style={{
+                      marginTop: 4,
+                      padding: '8px 12px',
+                      background: '#1a1a1e',
+                      borderRadius: 8,
+                      maxHeight: 200,
+                      overflow: 'auto',
+                      whiteSpace: 'pre-wrap',
+                      fontSize: '0.78rem',
+                      color: '#71717a',
+                      fontStyle: 'italic',
+                    }}>
+                    {msg.thinking}
+                  </div>
+                </details>
+              )}
               <div className={msg.role === 'assistant' ? 'markdown-body' : ''}>
                 <ReactMarkdown>{msg.content}</ReactMarkdown>
               </div>
@@ -166,11 +220,10 @@ export default function ChatPage() {
               )}
             </div>
         ))}
-        {loading && messages.some(m => m.streaming && !m.content) && (
+        {loading && messages.some(m => m.streaming && !m.content && !m.thinking) && (
           <div style={{ color: '#71717a', fontSize: '0.8rem', padding: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
             <span className="thinking-dot" />
-            Thinking... ({elapsed}s)
-            {elapsed > 10 && <span style={{ marginLeft: 8, color: '#52525b' }}>KIMI is generating a detailed analysis, please wait</span>}
+            {messages.find(m => m.streaming)?.status || 'Processing...'} ({elapsed}s)
           </div>
         )}
         <div ref={bottomRef} />

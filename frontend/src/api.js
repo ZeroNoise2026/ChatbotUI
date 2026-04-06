@@ -39,7 +39,7 @@ export const api = {
    * SSE streaming chat — calls onToken(text) for each token, onDone() when finished.
    * Returns an abort controller so the caller can cancel.
    */
-  chatStream: async (question, ticker, { onToken, onError, onDone }) => {
+  chatStream: async (question, ticker, { onToken, onThinking, onStatus, onError, onDone }) => {
     const controller = new AbortController()
     try {
       const res = await fetch(`${API_BASE}/chat/stream`, {
@@ -80,7 +80,13 @@ export const api = {
               onDone?.()
               return controller
             }
-            try { onToken?.(JSON.parse(data)) } catch { onToken?.(data) }
+            try {
+              const parsed = JSON.parse(data)
+              if (parsed.type === 'status') onStatus?.(parsed.text)
+              else if (parsed.type === 'thinking') onThinking?.(parsed.text)
+              else if (parsed.type === 'token') onToken?.(parsed.text)
+              else onToken?.(parsed.text || data)
+            } catch { onToken?.(data) }
           }
         }
       }
