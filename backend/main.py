@@ -28,7 +28,7 @@ from typing import Optional
 import db
 import rag
 from fetcher import fetch_context
-from summarizer import generate_summary
+from summarizer import generate_summary, generate_briefing
 
 logging.basicConfig(
     level=logging.INFO,
@@ -131,6 +131,38 @@ def latest_briefing(x_user_id: str = Header(None)):
     if not briefing:
         return {"message": "No briefings yet. Your first briefing will be generated at 8:00 AM your local time."}
     return briefing
+
+
+# ── Refresh Briefing (on-demand) ─────────────────────────────
+
+@app.post("/api/briefings/refresh")
+def refresh_briefing(x_user_id: str = Header(None)):
+    """Generate a new briefing right now for the user's watchlist."""
+    user_id = _get_user_id(x_user_id)
+    watchlist = db.get_watchlist(user_id)
+    tickers = [w["ticker"] for w in watchlist]
+    if not tickers:
+        raise HTTPException(status_code=400, detail="Watchlist is empty. Add tickers first.")
+
+    from datetime import datetime, timezone as tz
+    local_date = datetime.now(tz.utc).strftime("%Y-%m-%d")
+
+    contexts = []
+    for ticker in tickers:
+        try:
+            ctx = fetch_context(ticker, news_limit=50)
+            if ctx.total_chars > 0:
+                contexts.append(ctx)
+        except Exception as e:
+            logging.warning(f"Failed to fetch {ticker}: {e}")
+
+    if not contexts:
+        raise HTTPException(status_code=404, detail="No data available for any watchlist ticker.")
+
+    content = generate_briefing(contexts)
+    header = f"# Daily Briefing — {local_date}\n\n> Tickers: {', '.join(tickers)}\n\n"
+    db.upsert_briefing(user_id, local_date, header + content, tickers)
+    return {"status": "ok", "briefing_date": local_date}
 
 
 # ── RAG Chat ──────────────────────────────────────────────────

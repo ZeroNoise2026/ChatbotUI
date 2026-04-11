@@ -6,11 +6,26 @@ Moonshot API client for on-demand summarization and daily briefing generation.
 import logging
 from openai import OpenAI, RateLimitError, APITimeoutError, APIConnectionError
 import time
-from config import MOONSHOT_API_KEY, MOONSHOT_BASE_URL, MOONSHOT_MODEL
+from config import MOONSHOT_API_KEY, MOONSHOT_BASE_URL
 from fetcher import TickerContext
 
 logger = logging.getLogger(__name__)
 _client = None
+
+# ── Dynamic model selection (same logic as Summarization/shared/llm.py) ──
+_MODEL_TIERS = [
+    ("moonshot-v1-8k",   8_000 * 4 * 0.8),
+    ("moonshot-v1-32k",  32_000 * 4 * 0.8),
+    ("moonshot-v1-128k", 128_000 * 4 * 0.8),
+    ("kimi-k2.5",        float("inf")),
+]
+
+
+def _pick_model(prompt_chars: int) -> str:
+    for model, max_chars in _MODEL_TIERS:
+        if prompt_chars <= max_chars:
+            return model
+    return _MODEL_TIERS[-1][0]
 
 SUMMARY_SYSTEM_PROMPT = """You are a senior financial analyst skilled at synthesizing multi-source financial data into concise investment summaries.
 
@@ -51,19 +66,27 @@ def _get_client() -> OpenAI:
 
 def _call_llm(system_prompt: str, user_prompt: str, max_retries: int = 3) -> str:
     client = _get_client()
+    total_chars = len(system_prompt) + len(user_prompt)
+    model = _pick_model(total_chars)
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+
+    # kimi-k2.5 only accepts temperature=1
+    temperature = 1.0
+
+    logger.info(f"  LLM call: model={model}, prompt ~{total_chars:,} chars")
+
     for attempt in range(1, max_retries + 1):
         try:
             response = client.chat.completions.create(
-                model=MOONSHOT_MODEL,
+                model=model,
                 messages=messages,
-                temperature=1.0,
+                temperature=temperature,
             )
             usage = response.usage
-            logger.info(f"  LLM done: prompt={usage.prompt_tokens}, completion={usage.completion_tokens}")
+            logger.info(f"  LLM done: model={model}, prompt={usage.prompt_tokens}, completion={usage.completion_tokens}")
             return response.choices[0].message.content
 
         except RateLimitError as e:
