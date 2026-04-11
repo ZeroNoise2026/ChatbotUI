@@ -7,6 +7,31 @@ export default function BriefingPage() {
   const [history, setHistory] = useState([])
   const [selectedIdx, setSelectedIdx] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState(null)
+
+  const loadBriefings = () => {
+    return api.getBriefings(7).then(data => {
+      setHistory(data)
+      if (data.length > 0) {
+        setBriefing(data[0])
+        setSelectedIdx(0)
+      }
+    })
+  }
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    setError(null)
+    try {
+      await api.refreshBriefing()
+      await loadBriefings()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   useEffect(() => {
     api.getBriefings(7)
@@ -24,10 +49,34 @@ export default function BriefingPage() {
 
   if (loading) return <div style={{ padding: 40, color: '#71717a' }}>Loading...</div>
 
+  const refreshButton = (
+    <button
+      onClick={handleRefresh}
+      disabled={refreshing}
+      style={{
+        padding: '8px 16px',
+        fontSize: '0.85rem',
+        fontWeight: 600,
+        background: refreshing ? '#27272a' : '#3b82f6',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 8,
+        cursor: refreshing ? 'not-allowed' : 'pointer',
+        opacity: refreshing ? 0.6 : 1,
+      }}
+    >
+      {refreshing ? 'Generating...' : '↻ Refresh'}
+    </button>
+  )
+
   if (!briefing || !briefing.content) {
     return (
       <div style={{ maxWidth: 720 }}>
-        <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: 8 }}>Daily Briefing</h1>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Daily Briefing</h1>
+          {refreshButton}
+        </div>
+        {error && <p style={{ color: '#ef4444', fontSize: '0.85rem', marginBottom: 12 }}>{error}</p>}
         <div style={{
           marginTop: 32,
           padding: 32,
@@ -39,7 +88,7 @@ export default function BriefingPage() {
         }}>
           <p style={{ fontSize: '1.125rem', marginBottom: 8 }}>No briefings yet</p>
           <p style={{ fontSize: '0.875rem' }}>
-            Add tickers to your watchlist and your first briefing will be generated at 8:00 AM your local time.
+            Add tickers to your watchlist and click Refresh, or your first briefing will be generated at 8:00 AM your local time.
           </p>
         </div>
       </div>
@@ -48,7 +97,11 @@ export default function BriefingPage() {
 
   return (
     <div style={{ maxWidth: 720 }}>
-      <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: 8 }}>Daily Briefing</h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Daily Briefing</h1>
+        {refreshButton}
+      </div>
+      {error && <p style={{ color: '#ef4444', fontSize: '0.85rem', marginBottom: 12 }}>{error}</p>}
 
       {history.length > 1 && (
         <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>

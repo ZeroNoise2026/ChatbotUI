@@ -34,6 +34,7 @@ export const api = {
 
   getBriefings: (limit = 7) => request(`/briefings?limit=${limit}`),
   getLatestBriefing: () => request('/briefings/latest'),
+  refreshBriefing: () => request('/briefings/refresh', { method: 'POST' }),
 
   /**
    * SSE streaming chat — calls onToken(text) for each token, onDone() when finished.
