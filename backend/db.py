@@ -2,6 +2,8 @@
 # Supabase data access layer for the ChatbotUI backend.
 
 import logging
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 from supabase import create_client, Client
 from config import SUPABASE_URL, SUPABASE_KEY
@@ -168,6 +170,38 @@ def upsert_briefing(user_id: str, briefing_date: str, content: str, tickers: lis
     }).execute()
 
 
+def get_briefing_by_date(user_id: str, briefing_date: str) -> Optional[dict]:
+    """Fetch one briefing by exact date. Returns None if not generated that day."""
+    client = get_client()
+    resp = (
+        client.table("daily_briefings")
+        .select("briefing_date, tickers, content, created_at")
+        .eq("user_id", user_id)
+        .eq("briefing_date", briefing_date)
+        .limit(1)
+        .execute()
+    )
+    return resp.data[0] if resp.data else None
+
+
+def get_briefing_dates(user_id: str, date_from: str, date_to: str) -> list[str]:
+    """Return the list of dates (YYYY-MM-DD) on which this user has a briefing.
+
+    Used by the frontend date picker to grey out days without data.
+    """
+    client = get_client()
+    resp = (
+        client.table("daily_briefings")
+        .select("briefing_date")
+        .eq("user_id", user_id)
+        .gte("briefing_date", date_from)
+        .lte("briefing_date", date_to)
+        .order("briefing_date", desc=True)
+        .execute()
+    )
+    return [row["briefing_date"] for row in (resp.data or [])]
+
+
 # ── Tracked Tickers ───────────────────────────────────────────
 
 def get_tracked_tickers() -> list[dict]:
@@ -222,3 +256,107 @@ def get_price_snapshots(ticker: str, limit: int = 30) -> list[dict]:
         .execute()
         .data
     )
+
+
+# ── Chat Sessions & Messages ──────────────────────────────────
+
+
+def _new_session_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def create_chat_session(user_id: str, title: str) -> dict:
+    """Create a new chat session. Title is truncated server-side to 40 chars."""
+    client = get_client()
+    sid = _new_session_id()
+    now_iso = _now_iso()
+    row = {
+        "id": sid,
+        "user_id": user_id,
+        "title": title[:40],
+        "tickers": [],
+        "created_at": now_iso,
+        "last_message_at": now_iso,
+        "message_count": 0,
+    }
+    client.table("chat_sessions").insert(row).execute()
+    return row
+
+
+def list_chat_sessions(user_id: str, limit: int = 100) -> list[dict]:
+    client = get_client()
+    return (
+        client.table("chat_sessions")
+        .select("id, title, tickers, created_at, last_message_at, message_count")
+        .eq("user_id", user_id)
+        .order("last_message_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+    ) or []
+
+
+def get_chat_session(user_id: str, session_id: str) -> Optional[dict]:
+    client = get_client()
+    resp = (
+        client.table("chat_sessions")
+        .select("id, user_id, title, tickers, created_at, last_message_at, message_count")
+        .eq("id", session_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    return resp.data[0] if resp.data else None
+
+
+def list_chat_messages(session_id: str) -> list[dict]:
+    client = get_client()
+    return (
+        client.table("chat_messages")
+        .select("role, content, tickers, created_at")
+        .eq("session_id", session_id)
+        .order("created_at", desc=False)
+        .execute()
+        .data
+    ) or []
+
+
+def append_chat_message(
+    session_id: str,
+    role: str,
+    content: str,
+    tickers: Optional[list[str]] = None,
+) -> None:
+    """Append a message. The bump_chat_session DB trigger updates last_message_at /
+    message_count / tickers atomically (see migrations/001c_session_bump_trigger.sql).
+    """
+    client = get_client()
+    client.table("chat_messages").insert({
+        "session_id": session_id,
+        "role": role,
+        "content": content,
+        "tickers": tickers or [],
+    }).execute()
+
+
+def delete_chat_session(user_id: str, session_id: str) -> None:
+    """Delete one session. CASCADE on chat_messages drops its messages too."""
+    client = get_client()
+    client.table("chat_sessions").delete().eq("id", session_id).eq("user_id", user_id).execute()
+
+
+def delete_all_chat_sessions(user_id: str) -> int:
+    """Delete all sessions for a user. CASCADE drops messages. Returns deleted count."""
+    client = get_client()
+    # Ask PostgREST for row representation so we can count them.
+    resp = (
+        client.table("chat_sessions")
+        .delete(returning="representation")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return len(resp.data or [])

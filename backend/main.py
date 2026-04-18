@@ -140,6 +140,34 @@ def latest_briefing(x_user_id: str = Header(None)):
     return briefing
 
 
+@app.get("/api/briefings/by-date")
+def briefing_by_date(date: str, x_user_id: str = Header(None)):
+    """Fetch a briefing for the given YYYY-MM-DD. 404 if no briefing that day."""
+    user_id = _get_user_id(x_user_id)
+    try:
+        briefing = db.get_briefing_by_date(user_id, date)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    if not briefing:
+        raise HTTPException(status_code=404, detail=f"No briefing for {date}")
+    return briefing
+
+
+@app.get("/api/briefings/dates")
+def briefing_dates(date_from: str, date_to: str, x_user_id: str = Header(None)):
+    """Return list of dates with briefings within [date_from, date_to].
+
+    Frontend uses this to grey out days without data in the date picker.
+    Both bounds are inclusive, format YYYY-MM-DD.
+    """
+    user_id = _get_user_id(x_user_id)
+    try:
+        dates = db.get_briefing_dates(user_id, date_from, date_to)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {"dates": dates}
+
+
 # ── Refresh Briefing (on-demand) ─────────────────────────────
 
 @app.post("/api/briefings/refresh")
@@ -176,20 +204,118 @@ def refresh_briefing(x_user_id: str = Header(None)):
 
 class ChatRequest(BaseModel):
     question: str
-    ticker: Optional[str] = None
+    ticker: Optional[str] = None             # explicit force-bind (e.g. clarification chip click)
+    context_tickers: Optional[list[str]] = None  # watchlist fallback scope
+    session_id: Optional[str] = None         # if absent, a new session is created
 
 @app.post("/api/chat/stream")
 def chat_stream(body: ChatRequest, x_user_id: str = Header(None)):
-    """SSE streaming chat — proxies token stream from question-service."""
-    _get_user_id(x_user_id)
+    """SSE streaming chat — proxies token stream from question-service, persists messages."""
+    user_id = _get_user_id(x_user_id)
+
+    # Resolve or create the session.
+    session_id = body.session_id
+    is_new_session = False
+    if session_id:
+        existing = db.get_chat_session(user_id, session_id)
+        if not existing:
+            # Stale id (another device deleted it) — create a new one.
+            session_id = None
+    if not session_id:
+        session = db.create_chat_session(user_id, title=body.question)
+        session_id = session["id"]
+        is_new_session = True
+
+    # Persist the user message up-front so it survives a stream error.
+    tickers_hint: list[str] = []
+    if body.ticker:
+        tickers_hint.append(body.ticker.upper())
+    try:
+        db.append_chat_message(session_id, "user", body.question, tickers=tickers_hint)
+    except Exception as e:
+        logging.warning(f"Failed to persist user message: {e}")
+
+    import json as _json
+
+    def proxy_and_persist():
+        # Announce session id so frontend can update its URL/state.
+        yield f"data: {_json.dumps({'type': 'session', 'id': session_id, 'is_new': is_new_session})}\n\n"
+
+        assistant_buf: list[str] = []
+        for raw_line in rag.stream_answer_sse(
+            body.question,
+            ticker=body.ticker,
+            context_tickers=body.context_tickers or [],
+        ):
+            yield raw_line
+            # Parse to accumulate assistant tokens (best-effort; never block on error).
+            for line in raw_line.splitlines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload == "[DONE]" or payload.startswith("[Error:"):
+                    continue
+                try:
+                    obj = _json.loads(payload)
+                except Exception:
+                    continue
+                if obj.get("type") == "token":
+                    assistant_buf.append(obj.get("text") or "")
+
+        # Persist assistant message after the stream completes.
+        final_text = "".join(assistant_buf).strip()
+        if final_text:
+            try:
+                db.append_chat_message(session_id, "assistant", final_text, tickers=tickers_hint)
+            except Exception as e:
+                logging.warning(f"Failed to persist assistant message: {e}")
+
     return StreamingResponse(
-        rag.stream_answer_sse(body.question, ticker=body.ticker),
+        proxy_and_persist(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── Chat sessions ─────────────────────────────────────────────
+
+@app.get("/api/chat/sessions")
+def list_sessions(x_user_id: str = Header(None)):
+    user_id = _get_user_id(x_user_id)
+    try:
+        return db.list_chat_sessions(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/api/chat/sessions/{session_id}/messages")
+def get_session_messages(session_id: str, x_user_id: str = Header(None)):
+    user_id = _get_user_id(x_user_id)
+    # Ownership check
+    session = db.get_chat_session(user_id, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "session": session,
+        "messages": db.list_chat_messages(session_id),
+    }
+
+
+@app.delete("/api/chat/sessions/{session_id}")
+def remove_session(session_id: str, x_user_id: str = Header(None)):
+    user_id = _get_user_id(x_user_id)
+    db.delete_chat_session(user_id, session_id)
+    return {"status": "ok"}
+
+
+@app.delete("/api/chat/sessions")
+def remove_all_sessions(x_user_id: str = Header(None)):
+    user_id = _get_user_id(x_user_id)
+    count = db.delete_all_chat_sessions(user_id)
+    return {"status": "ok", "deleted": count}
 
 
 # ── On-demand Summarization ───────────────────────────────────

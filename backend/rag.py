@@ -6,21 +6,32 @@ Instead of running its own embedding/vector-search/LLM pipeline,
 this module delegates to the question-service (:8003) which handles
 routing, tier1/tier2 retrieval, and KIMI generation.
 """
+from __future__ import annotations
 
 import logging
 import requests
-from typing import Generator
+from typing import Generator, Optional
 from config import QUESTION_SERVICE_URL
 
 logger = logging.getLogger(__name__)
 
 
-def stream_answer_sse(question: str, ticker: str = None) -> Generator[str, None, None]:
-    """Proxy SSE stream from question-service — yields raw SSE lines."""
+def stream_answer_sse(
+    question: str,
+    ticker: Optional[str] = None,
+    context_tickers: Optional[list[str]] = None,
+) -> Generator[str, None, None]:
+    """Proxy SSE stream from question-service — yields raw SSE lines.
+
+    - `ticker`: explicit force-bind (from clarification chip).
+    - `context_tickers`: user's watchlist; used only when no ticker in query.
+    """
     url = f"{QUESTION_SERVICE_URL}/api/ask/stream"
-    payload = {"query": question}
+    payload: dict = {"query": question}
     if ticker:
         payload["tickers"] = [ticker]
+    if context_tickers:
+        payload["context_tickers"] = [t.upper() for t in context_tickers if t]
 
     try:
         resp = requests.post(url, json=payload, timeout=(10, 180), stream=True)
