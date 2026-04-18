@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { api } from '../api'
 
 export default function ChatPage() {
@@ -204,7 +205,7 @@ export default function ChatPage() {
                 </details>
               )}
               <div className={msg.role === 'assistant' ? 'markdown-body' : ''}>
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
               </div>
               {msg.sources && msg.sources.length > 0 && (
                 <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #3f3f46', fontSize: '0.7rem', color: '#71717a' }}>
