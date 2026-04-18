@@ -1,4 +1,9 @@
-const API_BASE = '/api'
+// In dev: Vite proxies '/api' → http://localhost:8000 (see vite.config.js).
+// In prod (Vercel): set VITE_API_URL=https://<cloud-run-backend>.run.app
+// and API calls go directly to the Cloud Run backend.
+const API_BASE = (import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
+  : '/api')
 
 function getUserId() {
   let id = localStorage.getItem('quantagent_user_id')

@@ -19,6 +19,7 @@ Run:
 """
 
 import logging
+import os
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -38,9 +39,15 @@ logging.basicConfig(
 
 app = FastAPI(title="QuantAgent Chat API", version="1.0.0")
 
+# CORS: in prod set ALLOWED_ORIGINS="https://your-app.vercel.app,https://your-app-*.vercel.app"
+# Defaults to localhost for dev.
+_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173")
+_allowed_origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
+    allow_origin_regex=os.getenv("ALLOWED_ORIGIN_REGEX"),  # e.g. https://.*\.vercel\.app
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
