@@ -25,6 +25,8 @@ async function request(path, options = {}) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || err.message || 'Request failed')
   }
+  // 204 No Content (e.g. DELETE endpoints) — no body to parse
+  if (res.status === 204) return null
   return res.json()
 }
 
@@ -39,13 +41,26 @@ export const api = {
 
   getBriefings: (limit = 7) => request(`/briefings?limit=${limit}`),
   getLatestBriefing: () => request('/briefings/latest'),
+  getBriefingByDate: (date) => request(`/briefings/by-date?date=${date}`),
+  getBriefingDates: (dateFrom, dateTo) =>
+    request(`/briefings/dates?date_from=${dateFrom}&date_to=${dateTo}`),
   refreshBriefing: () => request('/briefings/refresh', { method: 'POST' }),
 
   /**
-   * SSE streaming chat — calls onToken(text) for each token, onDone() when finished.
+   * SSE streaming chat.
+   *   - `question`: user query
+   *   - `opts.forceTicker`: string — explicit force-bind (e.g. from clarification chip)
+   *   - `opts.contextTickers`: string[] — user's watchlist, fallback scope only
+   * Callbacks: onToken, onThinking, onStatus, onError, onDone, onClarification({question, options})
    * Returns an abort controller so the caller can cancel.
    */
-  chatStream: async (question, ticker, { onToken, onThinking, onStatus, onError, onDone }) => {
+  chatStream: async (question, opts = {}) => {
+    const {
+      forceTicker = null,
+      contextTickers = [],
+      sessionId = null,
+      onToken, onThinking, onStatus, onError, onDone, onClarification, onSession,
+    } = opts
     const controller = new AbortController()
     try {
       const res = await fetch(`${API_BASE}/chat/stream`, {
@@ -54,7 +69,12 @@ export const api = {
           'Content-Type': 'application/json',
           'X-User-Id': getUserId(),
         },
-        body: JSON.stringify({ question, ticker }),
+        body: JSON.stringify({
+          question,
+          ticker: forceTicker || null,
+          context_tickers: contextTickers,
+          session_id: sessionId,
+        }),
         signal: controller.signal,
       })
       if (!res.ok) {
@@ -91,6 +111,13 @@ export const api = {
               if (parsed.type === 'status') onStatus?.(parsed.text)
               else if (parsed.type === 'thinking') onThinking?.(parsed.text)
               else if (parsed.type === 'token') onToken?.(parsed.text)
+              else if (parsed.type === 'clarification') {
+                try {
+                  const inner = JSON.parse(parsed.text)
+                  onClarification?.(inner)
+                } catch { onClarification?.({ question, options: [] }) }
+              }
+              else if (parsed.type === 'session') onSession?.(parsed)
               else onToken?.(parsed.text || data)
             } catch { onToken?.(data) }
           }
@@ -110,6 +137,12 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ ticker }),
   }),
+
+  // ── Chat sessions ────────────────────────────────────────
+  listChatSessions: () => request('/chat/sessions'),
+  getChatSessionMessages: (id) => request(`/chat/sessions/${id}/messages`),
+  deleteChatSession: (id) => request(`/chat/sessions/${id}`, { method: 'DELETE' }),
+  deleteAllChatSessions: () => request('/chat/sessions', { method: 'DELETE' }),
 
   getUserId,
 }
