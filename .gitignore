@@ -8,3 +8,4 @@ dist/
 .vite/
 .DS_Store
 *.log
+ISSUES.md
