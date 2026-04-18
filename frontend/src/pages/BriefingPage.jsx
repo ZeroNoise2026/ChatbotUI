@@ -1,31 +1,62 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { api } from '../api'
+import { fmtDate as fmt, today, daysAgo } from '../utils/date'
+import { colors } from '../utils/theme'
 
 export default function BriefingPage() {
+  const [selectedDate, setSelectedDate] = useState(fmt(today()))
   const [briefing, setBriefing] = useState(null)
-  const [history, setHistory] = useState([])
-  const [selectedIdx, setSelectedIdx] = useState(0)
+  const [availableDates, setAvailableDates] = useState(new Set())  // 'YYYY-MM-DD' strings
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
+  const hydratedRef = useRef(false)  // don't clobber the user's pick with the default
 
-  const loadBriefings = () => {
-    return api.getBriefings(7).then(data => {
-      setHistory(data)
-      if (data.length > 0) {
-        setBriefing(data[0])
-        setSelectedIdx(0)
-      }
-    })
-  }
+  const maxDate = useMemo(() => fmt(today()), [])
+  const minDate = useMemo(() => fmt(daysAgo(365)), [])
+
+  // Load set of dates that have briefings (last year)
+  useEffect(() => {
+    api.getBriefingDates(minDate, maxDate)
+      .then(({ dates }) => {
+        const list = dates || []
+        setAvailableDates(new Set(list))
+        if (!hydratedRef.current && list.length > 0) {
+          setSelectedDate(list[0])
+        }
+        hydratedRef.current = true
+      })
+      .catch(() => {
+        setAvailableDates(new Set())
+        hydratedRef.current = true
+      })
+  }, [minDate, maxDate])
+
+  // Load briefing whenever selectedDate changes
+  useEffect(() => {
+    if (!selectedDate) return
+    setLoading(true)
+    setError(null)
+    api.getBriefingByDate(selectedDate)
+      .then(setBriefing)
+      .catch((e) => {
+        setBriefing(null)
+        if (!String(e.message).toLowerCase().includes('no briefing')) {
+          setError(e.message)
+        }
+      })
+      .finally(() => setLoading(false))
+  }, [selectedDate])
 
   const handleRefresh = async () => {
     setRefreshing(true)
     setError(null)
     try {
-      await api.refreshBriefing()
-      await loadBriefings()
+      const { briefing_date } = await api.refreshBriefing()
+      const { dates } = await api.getBriefingDates(minDate, maxDate)
+      setAvailableDates(new Set(dates || []))
+      setSelectedDate(briefing_date)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -33,109 +64,88 @@ export default function BriefingPage() {
     }
   }
 
-  useEffect(() => {
-    api.getBriefings(7)
-      .then(data => {
-        setHistory(data)
-        if (data.length > 0) setBriefing(data[0])
-      })
-      .finally(() => setLoading(false))
-  }, [])
-
-  const selectBriefing = (idx) => {
-    setSelectedIdx(idx)
-    setBriefing(history[idx])
-  }
-
-  if (loading) return <div style={{ padding: 40, color: '#71717a' }}>Loading...</div>
-
-  const refreshButton = (
-    <button
-      onClick={handleRefresh}
-      disabled={refreshing}
-      style={{
-        padding: '8px 16px',
-        fontSize: '0.85rem',
-        fontWeight: 600,
-        background: refreshing ? '#27272a' : '#3b82f6',
-        color: '#fff',
-        border: 'none',
-        borderRadius: 8,
-        cursor: refreshing ? 'not-allowed' : 'pointer',
-        opacity: refreshing ? 0.6 : 1,
-      }}
-    >
-      {refreshing ? 'Generating...' : '↻ Refresh'}
-    </button>
-  )
-
-  if (!briefing || !briefing.content) {
-    return (
-      <div style={{ maxWidth: 720 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Daily Briefing</h1>
-          {refreshButton}
-        </div>
-        {error && <p style={{ color: '#ef4444', fontSize: '0.85rem', marginBottom: 12 }}>{error}</p>}
-        <div style={{
-          marginTop: 32,
-          padding: 32,
-          background: '#18181b',
-          borderRadius: 12,
-          border: '1px solid #27272a',
-          textAlign: 'center',
-          color: '#71717a',
-        }}>
-          <p style={{ fontSize: '1.125rem', marginBottom: 8 }}>No briefings yet</p>
-          <p style={{ fontSize: '0.875rem' }}>
-            Add tickers to your watchlist and click Refresh, or your first briefing will be generated at 8:00 AM your local time.
-          </p>
-        </div>
-      </div>
-    )
+  const handlePick = (value) => {
+    hydratedRef.current = true
+    setSelectedDate(value)
   }
 
   return (
     <div style={{ maxWidth: 720 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
         <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Daily Briefing</h1>
-        {refreshButton}
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          style={{
+            padding: '8px 16px',
+            fontSize: '0.85rem',
+            fontWeight: 600,
+            background: refreshing ? colors.bgElevated : colors.primary,
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            cursor: refreshing ? 'not-allowed' : 'pointer',
+            opacity: refreshing ? 0.6 : 1,
+          }}
+        >
+          {refreshing ? 'Generating...' : '↻ Refresh'}
+        </button>
       </div>
-      {error && <p style={{ color: '#ef4444', fontSize: '0.85rem', marginBottom: 12 }}>{error}</p>}
 
-      {history.length > 1 && (
-        <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
-          {history.map((b, i) => (
-            <button
-              key={b.briefing_date}
-              onClick={() => selectBriefing(i)}
-              style={{
-                padding: '6px 12px',
-                fontSize: '0.75rem',
-                background: i === selectedIdx ? '#3b82f6' : '#27272a',
-                color: i === selectedIdx ? '#fff' : '#a1a1aa',
-                borderRadius: 6,
-              }}
-            >
-              {b.briefing_date}
-            </button>
-          ))}
+      <div style={{ marginBottom: 16 }}>
+        <input
+          type="date"
+          value={selectedDate}
+          min={minDate}
+          max={maxDate}
+          onChange={(e) => handlePick(e.target.value)}
+          style={{
+            padding: '6px 10px',
+            background: colors.bg,
+            color: colors.text,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 6,
+            fontSize: '0.85rem',
+            colorScheme: 'dark',
+          }}
+        />
+      </div>
+
+      {error && <p style={{ color: colors.error, fontSize: '0.85rem', marginBottom: 12 }}>{error}</p>}
+
+      {loading ? (
+        <div style={{ padding: 40, color: colors.textDim }}>Loading...</div>
+      ) : briefing && briefing.content ? (
+        <div style={{
+          background: colors.bg,
+          borderRadius: 12,
+          border: `1px solid ${colors.borderSoft}`,
+          padding: 24,
+        }}>
+          <div style={{ fontSize: '0.75rem', color: colors.textDim, marginBottom: 12 }}>
+            {briefing.briefing_date} &middot; {briefing.tickers?.join(', ')}
+          </div>
+          <div className="markdown-body" style={{ lineHeight: 1.7, fontSize: '0.9rem' }}>
+            <ReactMarkdown>{briefing.content}</ReactMarkdown>
+          </div>
+        </div>
+      ) : (
+        <div style={{
+          padding: 32,
+          background: colors.bg,
+          borderRadius: 12,
+          border: `1px solid ${colors.borderSoft}`,
+          textAlign: 'center',
+          color: colors.textDim,
+        }}>
+          <p style={{ fontSize: '1.05rem', marginBottom: 8 }}>No briefing for {selectedDate}</p>
+          <p style={{ fontSize: '0.85rem' }}>
+            {availableDates.size === 0
+              ? 'Add tickers to your watchlist and click Refresh to generate one.'
+              : 'Pick a different date, or click Refresh to generate today\'s briefing.'}
+          </p>
         </div>
       )}
-
-      <div style={{
-        background: '#18181b',
-        borderRadius: 12,
-        border: '1px solid #27272a',
-        padding: 24,
-      }}>
-        <div style={{ fontSize: '0.75rem', color: '#71717a', marginBottom: 12 }}>
-          {briefing.briefing_date} &middot; {briefing.tickers?.join(', ')}
-        </div>
-        <div className="markdown-body" style={{ lineHeight: 1.7, fontSize: '0.9rem' }}>
-          <ReactMarkdown>{briefing.content}</ReactMarkdown>
-        </div>
-      </div>
     </div>
   )
 }
