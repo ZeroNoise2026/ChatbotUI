@@ -206,7 +206,7 @@ export default function ChatPage() {
   return (
     <div style={{ display: 'flex', height: '100%', gap: 12 }}>
       {/* Left panel: session list */}
-      <div style={{
+      <div className="chat-sessions" style={{
         width: 240,
         flexShrink: 0,
         display: 'flex',

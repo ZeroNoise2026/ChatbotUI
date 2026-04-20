@@ -4,16 +4,9 @@ const NAV_ITEMS = [
   { id: 'chat', label: 'Chat', icon: '\u{1f4ac}' },
 ]
 
-export default function Sidebar({ activePage, onNavigate }) {
+export default function Sidebar({ activePage, onNavigate, open = false }) {
   return (
-    <nav style={{
-      width: 220,
-      background: '#18181b',
-      borderRight: '1px solid #27272a',
-      display: 'flex',
-      flexDirection: 'column',
-      padding: '20px 0',
-    }}>
+    <nav className={`app-sidebar ${open ? 'open' : ''}`}>
       <div style={{
         padding: '0 20px 24px',
         fontSize: '1.125rem',
