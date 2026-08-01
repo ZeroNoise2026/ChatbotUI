@@ -29,11 +29,23 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
-# Make the repo-root `skills/` package importable from this backend.
-# ChatbotUI/backend is two levels deep; the repo root is its grandparent.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+# Make the shared `skills` package importable.
+#
+# The package lives at <project-root>/<clone>/skills/, where <clone> is
+# whatever `git clone .../Skills.git` produced — "Skills" by default, which
+# does NOT match `import skills` on a case-sensitive filesystem (Linux,
+# Docker, CI). So probe the candidate clone names instead of assuming one.
+#
+# If no candidate matches, the package was pip-installed instead (see
+# Skills/pyproject.toml) and the installed distribution is used — that is
+# how the container image gets it.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+for _clone_name in ("Skills", "skills"):
+    _skills_repo = _PROJECT_ROOT / _clone_name
+    if (_skills_repo / "skills" / "__init__.py").is_file():
+        if str(_skills_repo) not in sys.path:
+            sys.path.insert(0, str(_skills_repo))
+        break
 
 import db
 import rag
@@ -47,6 +59,31 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+
+# Probe the skills package once, at import time.
+#
+# A missing package is a DEPLOYMENT error, and it needs to be loud here. It
+# used to be swallowed by the per-request try/except below, which meant a
+# container image built without the package disabled skill routing silently
+# — every chat request quietly fell through to RAG with only a per-request
+# warning. Genuine runtime routing failures are still handled per-request.
+try:
+    from skills import get_skill as _get_skill
+    from skills.router import route as _route_skill
+    _SKILLS_AVAILABLE = True
+except ImportError as _skills_import_err:
+    _get_skill = None
+    _route_skill = None
+    _SKILLS_AVAILABLE = False
+    logging.error(
+        "skills package unavailable — skill routing is DISABLED and all chat "
+        "will fall back to RAG. For local dev run `pip install -e ../../Skills`; "
+        "for the container make sure requirements.txt installs it. Cause: %s",
+        _skills_import_err,
+    )
+else:
+    logging.info("skills package loaded — skill routing enabled")
+
 
 app = FastAPI(title="QuantAgent Chat API", version="1.0.0")
 
@@ -245,19 +282,19 @@ def chat_stream(body: ChatRequest, user_id: str = Depends(get_current_user)):
         #
         # Any failure here (no API key, network blip, JSON parse error) lands
         # in `skill = None` and the request falls through to RAG below.
-        try:
-            from skills import get_skill
-            from skills.router import route as _route_skill
-            decision = _route_skill(body.question)
-        except Exception as e:
-            logging.warning("Skill router failed; falling back to RAG: %s", e)
-            decision = None
+        decision = None
+        if _SKILLS_AVAILABLE:
+            try:
+                decision = _route_skill(body.question)
+            except Exception as e:
+                logging.warning("Skill router failed; falling back to RAG: %s", e)
+                decision = None
 
         if decision is not None and decision.skill:
             logging.info("Routing to skill %r with args=%s",
                          decision.skill, decision.args)
             try:
-                result = get_skill(decision.skill).run(**decision.args)
+                result = _get_skill(decision.skill).run(**decision.args)
                 content = result.content or ""
                 # Emit as a single token chunk — the frontend accumulator
                 # joins all token texts and treats it as the assistant

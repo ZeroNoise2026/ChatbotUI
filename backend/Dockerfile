@@ -3,7 +3,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install deps first for better layer caching
+# Install deps first for better layer caching.
+# NOTE: this also pulls the shared `skills` package straight from its own git
+# repo (see requirements.txt). It deliberately is not COPY'd — the build
+# context is backend/, which cannot reach the sibling Skills repo.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
